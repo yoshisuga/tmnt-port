@@ -420,7 +420,7 @@ static bool frame_behind(void)
 		> next_frame + SDL_GetPerformanceFrequency() * FRAME_RATE_DENOMINATOR / FRAME_RATE_NUMERATOR;
 }
 
-#if defined(__ANDROID__) && defined(TMNT_CONSOLE)
+#if (defined(__ANDROID__) || defined(TMNT_IOS)) && defined(TMNT_CONSOLE)
 /* WIDE as the phone's screen is (Android's VIDEO has no WIDE), chosen again whenever the screen changes: a Fold
    opened or closed mid-game (Sebas: the picture stayed as it was, in half the screen), as outrunners-port's
    follow_screen. 20:9 where the screen is twice as wide as high or more (most phones), 16:9 from 16:9 on and on a
@@ -475,7 +475,7 @@ static void present(void)
 	SDL_Rect frame, shown;
 
 	SDL_GetRendererOutputSize(renderer, &out_width, &out_height);
-#if defined(__ANDROID__) && defined(TMNT_CONSOLE)
+#if (defined(__ANDROID__) || defined(TMNT_IOS)) && defined(TMNT_CONSOLE)
 	follow_screen(out_width, out_height);    /* (a Fold opened or closed: its WIDE, from the next frame) */
 #endif
 	scale = SDL_min((double)out_width / view, (double)out_height / TMNT_VIDEO_HEIGHT);
@@ -1456,8 +1456,8 @@ static char *saves_folder(void)
 {
 #ifdef __SWITCH__
 	return SDL_strdup(SWITCH_FOLDER "/");
-#elif defined(__ANDROID__)
-	return SDL_GetPrefPath("", "TMNT");    /* (the app's own folder, its internal storage) */
+#elif defined(__ANDROID__) || defined(TMNT_IOS)
+	return SDL_GetPrefPath("", "TMNT");    /* (the app's own folder; iOS's bundle is read-only) */
 #elif defined(_WIN32) || defined(TMNT_HANDHELD)
 	return SDL_GetBasePath();    /* (a handheld's: the game's folder on its card) */
 #else
@@ -1666,6 +1666,12 @@ int main(int argc, char **argv)
 	SDL_SetHint(SDL_HINT_ACCELEROMETER_AS_JOYSTICK, "0");
 	SDL_SetHint(SDL_HINT_ORIENTATIONS, "LandscapeLeft LandscapeRight");
 #endif
+#ifdef TMNT_IOS
+	SDL_SetHint(SDL_HINT_TOUCH_MOUSE_EVENTS, "0");          /* (fingers are the touch controls, not the mouse) */
+	SDL_SetHint(SDL_HINT_ACCELEROMETER_AS_JOYSTICK, "0");
+	SDL_SetHint(SDL_HINT_ORIENTATIONS, "LandscapeLeft LandscapeRight");
+	SDL_SetHint(SDL_HINT_IDLE_TIMER_DISABLED, "1");         /* (the screen stays on under a controller's hands) */
+#endif
 #ifdef TMNT_HANDHELD_KEYS
 	add_device_mappings();
 #endif
@@ -1755,6 +1761,10 @@ int main(int argc, char **argv)
 #elif defined(TMNT_HANDHELD_KEYS)
 	(void)scale;
 	window = SDL_CreateWindow(TITLE, 0, 0, 640, 480, SDL_WINDOW_FULLSCREEN_DESKTOP);    /* (the handheld's, whole) */
+#elif defined(TMNT_IOS)
+	(void)scale;
+	/* (the phone's whole screen, at its own pixels) */
+	window = SDL_CreateWindow(TITLE, 0, 0, 1280, 720, SDL_WINDOW_FULLSCREEN_DESKTOP | SDL_WINDOW_ALLOW_HIGHDPI);
 #elif defined(__ANDROID__)
 	(void)scale;
 	/* (the phone's whole screen: full screen is SDL's immersive mode, the system's bars hidden. A window would leave
@@ -1792,7 +1802,7 @@ int main(int argc, char **argv)
 		SDL_free(base);
 	}
 #endif
-#if defined(__ANDROID__) && defined(TMNT_CONSOLE)
+#if (defined(__ANDROID__) || defined(TMNT_IOS)) && defined(TMNT_CONSOLE)
 	{
 		/* WIDE as the phone's screen is at the start (follow_screen: again as it changes) */
 		int out_width = 0, out_height = 0;

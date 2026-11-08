@@ -1,7 +1,7 @@
 /**
  *    Name:        touch.c
  *    Description: the touch screen's controls (Android): a stick where the left thumb lands, ATTACK and JUMP at the
- *                 right, START (TMNT) or COIN (TMNT Arcade) over them, drawn over the picture, and what the fingers
+ *                 right with SPECIAL (both together) beside them, START (TMNT) or COIN (TMNT Arcade) over them, drawn over the picture, and what the fingers
  *                 on them hold: player 1's controls
  *    Version:     0.2.0
  *    Created:     06-11-2026
@@ -41,7 +41,7 @@
 #define START_LABEL         "COIN"
 #endif
 
-enum { HOLD_NOTHING, HOLD_STICK, HOLD_ATTACK, HOLD_JUMP, HOLD_START };
+enum { HOLD_NOTHING, HOLD_STICK, HOLD_ATTACK, HOLD_JUMP, HOLD_START, HOLD_SPECIAL };    /* (SPECIAL: JUMP and ATTACK together) */
 
 /* The controls on the screen now (touch_place), in its pixels */
 typedef struct
@@ -58,8 +58,11 @@ static struct
 	SDL_Rect area;                   /* the controls': the screen, or the room under the picture */
 	bool under;                      /* (the area is the room under the picture) */
 	float most_unit;                 /* MOST_UNIT_INCHES in the screen's pixels (none known: 0) */
-	circle stick_home, attack, jump, start;
+	circle stick_home, attack, jump, special, start;
 	float stick_reach;
+	uint8_t latched;                 /* (ATTACK and JUMP pressed since the last frame was drawn, though let go: a quick tap
+	                                    or click between two of the game's looks at the controls is not lost) */
+	bool latched_start;
 	struct
 	{
 		SDL_FingerID id;
@@ -87,12 +90,14 @@ static void place(void)
 		touch.stick_home = (circle){ unit * 2.2f, middle, touch.stick_reach };
 		touch.attack = (circle){ width - unit * 1.6f, middle - unit * 0.3f, unit * 1.05f };
 		touch.jump = (circle){ width - unit * 3.9f, middle + unit * 0.3f, unit * 1.05f };
+		touch.special = (circle){ width - unit * 6.2f, middle - unit * 0.3f, unit * 1.05f };
 		touch.start = (circle){ width / 2.0f, middle, unit * 0.7f };
 		return;
 	}
 	touch.stick_home = (circle){ unit * 2.2f, (float)touch.height - unit * 2.4f, touch.stick_reach };
 	touch.attack = (circle){ width - unit * 1.6f, (float)touch.height - unit * 2.0f, unit * 1.05f };
 	touch.jump = (circle){ width - unit * 3.9f, (float)touch.height - unit * 1.4f, unit * 1.05f };
+	touch.special = (circle){ width - unit * 6.2f, (float)touch.height - unit * 2.0f, unit * 1.05f };
 	touch.start = (circle){ width - unit * 1.6f, unit * 1.3f, unit * 0.7f };
 }
 
@@ -129,15 +134,41 @@ static bool inside(const circle *button, float x, float y, float more)
 	return dx * dx + dy * dy <= reach * reach;
 }
 
+/* The action button at x, y, the nearest of those it reaches (their reaches overlap a little): ATTACK, JUMP or
+   SPECIAL, else HOLD_NOTHING */
+static int action_at(float x, float y)
+{
+	const struct
+	{
+		const circle *button;
+		int holds;
+	} buttons[] = { { &touch.attack, HOLD_ATTACK }, { &touch.jump, HOLD_JUMP }, { &touch.special, HOLD_SPECIAL } };
+	int found = HOLD_NOTHING;
+	float nearest = 0.0f;
+
+	for (size_t index = 0; index < sizeof(buttons) / sizeof(buttons[0]); index++)
+	{
+		const float dx = x - buttons[index].button->x, dy = y - buttons[index].button->y;
+		const float distance = dx * dx + dy * dy;
+
+		if (inside(buttons[index].button, x, y, 1.25f) && (found == HOLD_NOTHING || distance < nearest))
+		{
+			found = buttons[index].holds;
+			nearest = distance;
+		}
+	}
+	return found;
+}
+
 /* What a finger at x, y on the screen holds as it lands there: a button under it, else the stick on the left half */
 static int under(float x, float y)
 {
+	const int action = action_at(x, y);
+
 	if (inside(&touch.start, x, y, 1.3f))
 		return HOLD_START;
-	if (inside(&touch.attack, x, y, 1.25f))
-		return HOLD_ATTACK;
-	if (inside(&touch.jump, x, y, 1.25f))
-		return HOLD_JUMP;
+	if (action != HOLD_NOTHING)
+		return action;
 	return x < (float)touch.width / 2.0f ? HOLD_STICK : HOLD_NOTHING;
 }
 
@@ -151,6 +182,72 @@ void touch_open(SDL_Renderer *renderer, const char *base)
 		touch.most_unit = dpi * MOST_UNIT_INCHES;
 }
 
+/* A finger (or the pointer's button: one more finger, id POINTER_ID) going down, moving or up, at (nx, ny) of the
+   screen, 0 to 1 */
+#define POINTER_ID ((SDL_FingerID)-2)
+
+static void finger_event(Uint32 type, SDL_FingerID id, float nx, float ny)
+{
+	{
+		{
+			const float x = nx * (float)touch.width, y = ny * (float)touch.height;
+			int index = -1, free_one = -1;
+
+			for (int finger = 0; finger < FINGERS; finger++)
+			{
+				if (touch.fingers[finger].holds != HOLD_NOTHING && touch.fingers[finger].id == id)
+					index = finger;
+				else if (touch.fingers[finger].holds == HOLD_NOTHING && free_one < 0)
+					free_one = finger;
+			}
+			if (type == SDL_FINGERUP)
+			{
+				if (index >= 0)
+					touch.fingers[index].holds = HOLD_NOTHING;
+				return;
+			}
+			if (index < 0)
+			{
+				if (type != SDL_FINGERDOWN || free_one < 0 || (touch.fingers[free_one].holds = under(x, y))
+					== HOLD_NOTHING)
+					return;
+				index = free_one;
+				touch.fingers[index].id = id;
+				touch.fingers[index].x0 = x;
+				touch.fingers[index].y0 = y;
+			}
+			touch.fingers[index].x = x;
+			touch.fingers[index].y = y;
+			if (touch.fingers[index].holds == HOLD_ATTACK || touch.fingers[index].holds == HOLD_JUMP
+				|| touch.fingers[index].holds == HOLD_SPECIAL)
+			{
+				/* (a thumb sliding from one button onto another) */
+				const int now = action_at(x, y);
+
+				if (now != HOLD_NOTHING)
+					touch.fingers[index].holds = now;
+			}
+			switch (touch.fingers[index].holds)    /* (what it holds now, kept till the next frame: latched) */
+			{
+				case HOLD_ATTACK:
+					touch.latched |= TMNT_ATTACK;
+					break;
+				case HOLD_JUMP:
+					touch.latched |= TMNT_JUMP;
+					break;
+				case HOLD_SPECIAL:
+					touch.latched |= TMNT_ATTACK | TMNT_JUMP;
+					break;
+				case HOLD_START:
+					touch.latched_start = true;
+					break;
+				default:
+					break;
+			}
+		}
+	}
+}
+
 void touch_event(const SDL_Event *event)
 {
 	switch (event->type)
@@ -158,44 +255,32 @@ void touch_event(const SDL_Event *event)
 		case SDL_FINGERDOWN:
 		case SDL_FINGERMOTION:
 		case SDL_FINGERUP:
-		{
-			const float x = event->tfinger.x * (float)touch.width, y = event->tfinger.y * (float)touch.height;
-			int index = -1, free_one = -1;
-
 			touch.shown = true;
-			for (int finger = 0; finger < FINGERS; finger++)
-			{
-				if (touch.fingers[finger].holds != HOLD_NOTHING && touch.fingers[finger].id == event->tfinger.fingerId)
-					index = finger;
-				else if (touch.fingers[finger].holds == HOLD_NOTHING && free_one < 0)
-					free_one = finger;
-			}
-			if (event->type == SDL_FINGERUP)
-			{
-				if (index >= 0)
-					touch.fingers[index].holds = HOLD_NOTHING;
+			finger_event(event->type, event->tfinger.fingerId, event->tfinger.x, event->tfinger.y);
+			break;
+		/* A mouse or trackpad's click (the iOS simulator's, an iPad's pointer): SDL gives it as the mouse's events, not a
+		   finger's; the touch screen's own are sent as fingers (their mouse events, TOUCH_MOUSE_EVENTS, are off) */
+		case SDL_MOUSEBUTTONDOWN:
+		case SDL_MOUSEBUTTONUP:
+		case SDL_MOUSEMOTION:
+		{
+			SDL_Window *under_pointer = SDL_GetMouseFocus();
+			int window_width = 0, window_height = 0;
+			const bool button = event->type == SDL_MOUSEMOTION ? (event->motion.state & SDL_BUTTON_LMASK) != 0
+				: event->button.button == SDL_BUTTON_LEFT;
+			const Sint32 mouse = event->type == SDL_MOUSEMOTION ? event->motion.which : event->button.which;
+			const Sint32 at_x = event->type == SDL_MOUSEMOTION ? event->motion.x : event->button.x;
+			const Sint32 at_y = event->type == SDL_MOUSEMOTION ? event->motion.y : event->button.y;
+
+			if (mouse == SDL_TOUCH_MOUSEID || !button || !under_pointer)
 				break;
-			}
-			if (index < 0)
-			{
-				if (event->type != SDL_FINGERDOWN || free_one < 0 || (touch.fingers[free_one].holds = under(x, y))
-					== HOLD_NOTHING)
-					break;
-				index = free_one;
-				touch.fingers[index].id = event->tfinger.fingerId;
-				touch.fingers[index].x0 = x;
-				touch.fingers[index].y0 = y;
-			}
-			touch.fingers[index].x = x;
-			touch.fingers[index].y = y;
-			if (touch.fingers[index].holds == HOLD_ATTACK || touch.fingers[index].holds == HOLD_JUMP)
-			{
-				/* (a thumb sliding from one button onto the other) */
-				if (inside(&touch.attack, x, y, 1.25f))
-					touch.fingers[index].holds = HOLD_ATTACK;
-				else if (inside(&touch.jump, x, y, 1.25f))
-					touch.fingers[index].holds = HOLD_JUMP;
-			}
+			SDL_GetWindowSize(under_pointer, &window_width, &window_height);
+			if (window_width <= 0 || window_height <= 0)
+				break;
+			touch.shown = true;
+			finger_event(event->type == SDL_MOUSEBUTTONDOWN ? SDL_FINGERDOWN
+				: event->type == SDL_MOUSEBUTTONUP ? SDL_FINGERUP : SDL_FINGERMOTION, POINTER_ID,
+				(float)at_x / (float)window_width, (float)at_y / (float)window_height);
 			break;
 		}
 		case SDL_CONTROLLERBUTTONDOWN:
@@ -243,14 +328,19 @@ uint8_t touch_controls(void)
 			case HOLD_JUMP:
 				held |= TMNT_JUMP;
 				break;
+			case HOLD_SPECIAL:
+				held |= TMNT_ATTACK | TMNT_JUMP;    /* (the special attack: both together) */
+				break;
 			default:
 				break;
 		}
-	return held;
+	return held | touch.latched;
 }
 
 bool touch_start(void)
 {
+	if (touch.latched_start)
+		return true;
 	for (int finger = 0; finger < FINGERS; finger++)
 		if (touch.fingers[finger].holds == HOLD_START)
 			return true;
@@ -308,6 +398,8 @@ void touch_draw(SDL_Renderer *renderer, int width, int height)
 	circle stick = { 0 }, knob;
 	SDL_Rect whole = { 0, 0, width, height };
 
+	touch.latched = 0;    /* (drawn once a frame, after the game looked: a tap lasts the frame it came in) */
+	touch.latched_start = false;
 	if (!touch.width)
 		touch_layout(width, height, &whole);    /* (none laid out yet: the whole screen's) */
 	if (!touch.shown)
@@ -335,6 +427,7 @@ void touch_draw(SDL_Renderer *renderer, int width, int height)
 	disc(renderer, &knob, (holding & (TMNT_LEFT | TMNT_RIGHT | TMNT_UP | TMNT_DOWN)) ? held : idle);
 	disc(renderer, &touch.attack, (holding & TMNT_ATTACK) ? held : idle);
 	disc(renderer, &touch.jump, (holding & TMNT_JUMP) ? held : idle);
+	disc(renderer, &touch.special, (holding & (TMNT_ATTACK | TMNT_JUMP)) == (TMNT_ATTACK | TMNT_JUMP) ? held : idle);
 	disc(renderer, &touch.start, start_held ? held : idle);
 	if (touch.have_font)
 	{
@@ -342,6 +435,7 @@ void touch_draw(SDL_Renderer *renderer, int width, int height)
 
 		label(renderer, &touch.attack, "ATTACK", scale);
 		label(renderer, &touch.jump, "JUMP", scale);
+		label(renderer, &touch.special, "SPECIAL", SDL_min(scale, label_scale(&touch.special, "SPECIAL")));
 		label(renderer, &touch.start, START_LABEL, label_scale(&touch.start, START_LABEL));
 	}
 	SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE);

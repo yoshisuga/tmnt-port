@@ -34,6 +34,9 @@ The package also has the tools that make the game for your devices, with your RO
   ([ports/android/apk](ports/android/apk/README.md)): phones, tablets, and TVs with Android TV or Google TV (the
   Chromecast with Google TV too: its Android is 32-bit, and the APKs have both kinds), in the TV's apps with a
   banner.
+- **iOS** (an iPhone or iPad, or the simulator): built from source with Xcode, with your ROM set's assets pack
+  inside the app ([ports/ios](ports/ios/README.md)); SDL2 is patched for the UIScene lifecycle, which
+  apps linked against the iOS 27 SDK need.
 - **Anbernic's H700 handhelds** (RG40XX H...): TMNT Anbernic makes the folder for PORTS.
 
 What a tool makes has the game's data in it: it is yours alone, never share it. The package's `README.txt` has

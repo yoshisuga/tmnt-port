@@ -1,7 +1,7 @@
 /**
  *    Name:        tasks.c
  *    Description: native stacks for the game's tasks (host/tasks.h): fibers on Windows, the registers on the
- *                 task's stack on the Switch and Android (aarch64) and on 32-bit ARM, ucontext elsewhere
+ *                 task's stack on the Switch, Android and iOS (aarch64) and on 32-bit ARM, ucontext elsewhere
  *    Version:     0.1.0
  *    Created:     29-10-2026
  *    Modified:    07-11-2026
@@ -13,6 +13,10 @@
 #define _XOPEN_SOURCE 600    /* (macOS keeps the ucontext routines behind it, and marks them deprecated) */
 #endif
 #include "host/tasks.h"
+
+#ifdef __APPLE__
+#include <TargetConditionals.h>
+#endif
 
 #include <stdint.h>
 #include <stdio.h>
@@ -82,24 +86,37 @@ void host_task_switch(host_task *to)
 	SwitchToFiber(to->fiber);
 }
 
-#elif (defined(__aarch64__) && (defined(__SWITCH__) || defined(__ANDROID__))) || defined(__arm__)
+#elif (defined(__aarch64__) && (defined(__SWITCH__) || defined(__ANDROID__) || (defined(__APPLE__) && TARGET_OS_IPHONE))) \
+	|| defined(__arm__)
 
-/* The Switch's C library and Android's have no ucontext (nor musl's), and 32-bit ARM's C libraries none at all:
+/* The Switch's C library and Android's have no ucontext (nor musl's), iOS's marks its own unavailable, and 32-bit
+   ARM's C libraries have none at all:
    a task's registers are kept on its own stack. What a call keeps for its caller is pushed where the task stops
    and popped where it goes on; the stack pointer is all the task keeps beside it */
 #ifdef __aarch64__
 
-/* AAPCS64: x19-x29, the return address x30, d8-d15 */
+/* AAPCS64: x19-x29, the return address x30, d8-d15 (Apple's variant keeps x18, the platform register, untouched: it
+   is never saved nor set here) */
 #define SAVED_BYTES 160    /* x19-x30 and d8-d15, 8 bytes each */
 #define RETURN_SLOT 11     /* x30: where the first ret goes */
 
 void host_switch_stacks(void **from_stack, void *to_stack);
 
+#ifdef __APPLE__
+/* (Mach-O: C's names take a leading underscore, and there is no .type nor .size) */
+#define SWITCH_SYMBOL "_host_switch_stacks"
+#define SWITCH_BEGIN ".globl " SWITCH_SYMBOL "\n.p2align 2\n"
+#define SWITCH_END ""
+#else
+#define SWITCH_SYMBOL "host_switch_stacks"
+#define SWITCH_BEGIN ".global host_switch_stacks\n.type host_switch_stacks, %function\n"
+#define SWITCH_END ".size host_switch_stacks, .-host_switch_stacks\n"
+#endif
+
 __asm__(
 	".text\n"
-	".global host_switch_stacks\n"
-	".type host_switch_stacks, %function\n"
-	"host_switch_stacks:\n"
+	SWITCH_BEGIN
+	SWITCH_SYMBOL ":\n"
 	"	sub sp, sp, #160\n"
 	"	stp x19, x20, [sp, #0]\n"
 	"	stp x21, x22, [sp, #16]\n"
@@ -126,7 +143,7 @@ __asm__(
 	"	ldp d14, d15, [sp, #144]\n"
 	"	add sp, sp, #160\n"
 	"	ret\n"
-	".size host_switch_stacks, .-host_switch_stacks\n");
+	SWITCH_END);
 
 #else
 
