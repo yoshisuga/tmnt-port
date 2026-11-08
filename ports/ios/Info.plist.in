@@ -46,6 +46,9 @@
 	<dict/>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
+	<!-- MULTIPLAYER: iOS asks before an app talks to the local network -->
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>MULTIPLAYER finds and plays with the other devices on your local network.</string>
 	<key>GCSupportsControllerUserInteraction</key>
 	<true/>
 	<!-- UIScene lifecycle: required by the iOS 27 SDK (ports/ios/sdl2-uiscene.patch gives SDL its scene delegate) -->

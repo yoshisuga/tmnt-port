@@ -3,4 +3,5 @@
 	url = https://github.com/cheviman/arcade-decomp
 [submodule "lan"]
 	path = lan
-	url = https://github.com/cheviman/arcade-lan
+	url = https://github.com/yoshisuga/arcade-lan
+	branch = ios-multiplayer
